@@ -1,126 +1,117 @@
-const db = require("../db/database");
+const prisma = require("../db/prisma");
 
-function findAll(userId) {
-  const stmt = userId
-    ? db.prepare("SELECT * FROM tasks WHERE user_id = ? ORDER BY id DESC")
-    : db.prepare("SELECT * FROM tasks ORDER BY id DESC");
+async function findAll(userId) {
+  const where = userId ? { userId } : {};
+  const tasks = await prisma.task.findMany({
+    where,
+    orderBy: { id: "desc" },
+  });
 
-  const rows = userId ? stmt.all(userId) : stmt.all();
-
-  return rows.map(rowToTask);
+  return tasks.map(taskToDto);
 }
 
-function findById(id, userId) {
-  const stmt = userId
-    ? db.prepare("SELECT * FROM tasks WHERE id = ? AND user_id = ?")
-    : db.prepare("SELECT * FROM tasks WHERE id = ?");
+async function findById(id, userId) {
+  const taskId = Number(id);
+  if (Number.isNaN(taskId)) return null;
 
-  const row = userId
-    ? stmt.get(Number(id), userId)
-    : stmt.get(Number(id));
+  const where = userId ? { id: taskId, userId } : { id: taskId };
+  const task = await prisma.task.findFirst({ where });
 
-  return row ? rowToTask(row) : null;
+  return task ? taskToDto(task) : null;
 }
 
-function create(data) {
-  const now  = new Date().toISOString();
-  const stmt = db.prepare(`
-    INSERT INTO tasks (user_id, title, description, deadline, priority, completed, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  const result = stmt.run(
-    data.userId || null,
-    data.title.trim(),
-    data.description || "",
-    data.deadline    || null,
-    data.priority    || "medium",
-    data.completed   ? 1 : 0,
-    now,
-    now
-  );
-
-  const taskId = Number(result.lastInsertRowid);
+async function create(data) {
+  const created = await prisma.task.create({
+    data: {
+      userId:      data.userId || null,
+      title:       data.title.trim(),
+      description: data.description || "",
+      deadline:    data.deadline    || null,
+      priority:    data.priority    || "medium",
+      completed:   Boolean(data.completed),
+    },
+  });
 
   // Auto-notification
   try {
-    db.prepare(
-      "INSERT INTO notifications (id,user_id,title,message,type,read,link,created_at) VALUES (?,?,?,?,?,0,?,?)"
-    ).run(
-      `notif_task_${Date.now()}`,
-      data.userId || null,
-      "New Study Task Added",
-      `"${data.title.trim()}" was scheduled${data.deadline ? ` for ${data.deadline}` : ""}.`,
-      "task",
-      "/study-planner",
-      now
-    );
+    const deadlineText = data.deadline ? ` for ${data.deadline}` : "";
+    await prisma.notification.create({
+      data: {
+        id:      `notif_task_${Date.now()}`,
+        userId:  data.userId || null,
+        title:   "New Study Task Added",
+        message: `"${data.title.trim()}" was scheduled${deadlineText}.`,
+        type:    "task",
+        read:    false,
+        link:    "/study-planner",
+      },
+    });
   } catch (err) {
     console.error("Auto notification error:", err);
   }
 
-  return findById(taskId, data.userId);
+  return taskToDto(created);
 }
 
-function update(id, data, userId) {
-  const existing = findById(id, userId);
+async function update(id, data, userId) {
+  const existing = await findById(id, userId);
   if (!existing) return null;
 
-  const title       = data.title       !== undefined ? data.title.trim()      : existing.title;
-  const description = data.description !== undefined ? data.description       : existing.description;
-  const deadline    = data.deadline    !== undefined ? data.deadline          : existing.deadline;
-  const priority    = data.priority    !== undefined ? data.priority          : existing.priority;
-  const completed   = data.completed   !== undefined ? Boolean(data.completed): existing.completed;
-  const now         = new Date().toISOString();
-
-  db.prepare(`
-    UPDATE tasks SET title=?, description=?, deadline=?, priority=?, completed=?, updated_at=?
-    WHERE id=?
-  `).run(title, description, deadline, priority, completed ? 1 : 0, now, Number(id));
+  const taskId = Number(id);
+  const updated = await prisma.task.update({
+    where: { id: taskId },
+    data: {
+      title:       data.title !== undefined ? data.title.trim() : undefined,
+      description: data.description !== undefined ? data.description : undefined,
+      deadline:    data.deadline !== undefined ? data.deadline : undefined,
+      priority:    data.priority !== undefined ? data.priority : undefined,
+      completed:   data.completed !== undefined ? Boolean(data.completed) : undefined,
+    },
+  });
 
   // Achievement notification when completing a task
   if (data.completed === true && !existing.completed) {
     try {
-      db.prepare(
-        "INSERT INTO notifications (id,user_id,title,message,type,read,link,created_at) VALUES (?,?,?,?,?,0,?,?)"
-      ).run(
-        `notif_comp_${Date.now()}`,
-        existing.userId || null,
-        "Task Completed! 🎉",
-        `Great job finishing "${title}"! Keep up the momentum.`,
-        "achievement",
-        "/study-planner",
-        now
-      );
+      await prisma.notification.create({
+        data: {
+          id:      `notif_comp_${Date.now()}`,
+          userId:  existing.userId || null,
+          title:   "Task Completed! 🎉",
+          message: `Great job finishing "${updated.title}"! Keep up the momentum.`,
+          type:    "achievement",
+          read:    false,
+          link:    "/study-planner",
+        },
+      });
     } catch (err) {
       console.error("Auto completion notification error:", err);
     }
   }
 
-  return findById(id, userId);
+  return taskToDto(updated);
 }
 
-function remove(id, userId) {
-  const stmt = userId
-    ? db.prepare("DELETE FROM tasks WHERE id = ? AND user_id = ?")
-    : db.prepare("DELETE FROM tasks WHERE id = ?");
+async function remove(id, userId) {
+  const taskId = Number(id);
+  if (Number.isNaN(taskId)) return false;
 
-  const result = userId ? stmt.run(Number(id), userId) : stmt.run(Number(id));
-  return result.changes > 0;
+  const where = userId ? { id: taskId, userId } : { id: taskId };
+  const result = await prisma.task.deleteMany({ where });
+  return result.count > 0;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-function rowToTask(row) {
+function taskToDto(task) {
   return {
-    id:          row.id,
-    userId:      row.user_id,
-    title:       row.title,
-    description: row.description || "",
-    deadline:    row.deadline    || null,
-    priority:    row.priority    || "medium",
-    completed:   Boolean(row.completed),
-    createdAt:   row.created_at,
-    updatedAt:   row.updated_at,
+    id:          task.id,
+    userId:      task.userId,
+    title:       task.title,
+    description: task.description || "",
+    deadline:    task.deadline    || null,
+    priority:    task.priority    || "medium",
+    completed:   Boolean(task.completed),
+    createdAt:   task.createdAt instanceof Date ? task.createdAt.toISOString() : task.createdAt,
+    updatedAt:   task.updatedAt instanceof Date ? task.updatedAt.toISOString() : task.updatedAt,
   };
 }
 
