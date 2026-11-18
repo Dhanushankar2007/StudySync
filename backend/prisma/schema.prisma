@@ -7,17 +7,18 @@ generator client {
 }
 
 model User {
-  id                String         @id
+  id                String    @id
   name              String
-  email             String         @unique
-  passwordHash      String         @map("password_hash")
-  resetToken        String?        @map("reset_token")
-  resetTokenExpires DateTime?      @map("reset_token_expires")
-  createdAt         DateTime       @default(now()) @map("created_at")
-  updatedAt         DateTime       @updatedAt @map("updated_at")
+  email             String    @unique
+  passwordHash      String    @map("password_hash")
+  resetToken        String?   @map("reset_token")
+  resetTokenExpires DateTime? @map("reset_token_expires")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
 
-  notifications     Notification[]
-  tasks             Task[]
+  notifications Notification[]
+  tasks         Task[]
+  notes         Note[]
 
   @@map("users")
 }
@@ -32,7 +33,7 @@ model Notification {
   link      String?
   createdAt DateTime @default(now()) @map("created_at")
 
-  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("notifications")
 }
@@ -48,7 +49,20 @@ model Task {
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
-  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("tasks")
+}
+
+model Note {
+  id        Int      @id @default(autoincrement())
+  userId    String?  @map("user_id")
+  title     String
+  content   String   @default("")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notes")
 }
